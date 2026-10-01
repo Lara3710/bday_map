@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Waypoint — Saved Places</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&display=swap" rel="stylesheet">
+
+<!--
+  ============================================================
+  HOW TO CUSTOMIZE THIS FILE BEFORE SENDING IT TO HER
+  ============================================================
+  Open the <script> near the bottom, find the "CONFIG" block:
+  1. FRIEND_NAME — her name.
+  2. Video — pick ONE of these two, based on length:
+
+     SHORT clip (well under a minute):
+       Set VIDEO_SRC to a base64 data URL using video-to-dataurl.html
+       (included alongside this file). Works if you ask Claude to
+       publish this file directly — you'll get a claude.ai link.
+
+     LONGER video (a couple minutes or more):
+       Base64 won't fit (published pages cap out at 16MB total).
+       Instead: upload the video to YouTube as "Unlisted" (not
+       Public, not Private — Unlisted means only people with the
+       link can find it), then paste its video ID into YOUTUBE_ID.
+       IMPORTANT: this only works if YOU host this HTML file
+       yourself (e.g. drag it into netlify.com/drop) — it will NOT
+       work if published through Claude, since that environment
+       blocks loading YouTube. Self-hosting has no such limit.
+
+  3. ADDRESSES — the pins that are already on the map when she
+     opens it. Leave exactly one with `flag:true` — that's the
+     one that opens the surprise when she taps it. Everything
+     else (search, add pin, edit, delete, drag, pan/zoom) is fully
+     working, so feel free to also add real pins to sell it.
+  ============================================================
+-->
+
+<style>
+  :root{
+    --bg-app:#EEF1F6; --surface:#FFFFFF; --ink:#1B1F27; --ink-soft:#6B7280;
+    --line:#E3E6EC; --accent:#2E5EFF; --accent-soft:#E8EDFF;
+    --warn:#FF8A3D; --warn-soft:#FFF1E4;
+    --land:#F1E7D2; --water:#AFDBFF; --park:#CFE8C0; --road:#FFFFFF; --roadline:#DFCFA6;
+    --label:#8B8A82;
+  }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body{ margin:0; min-height:100%; background:var(--bg-app); color:var(--ink);
+    font-family:'DM Sans',system-ui,-apple-system,sans-serif; -webkit-font-smoothing:antialiased; }
+  body{ display:flex; justify-content:center; padding:28px 14px 60px; }
+  @media (prefers-reduced-motion:reduce){ *{ animation-duration:.001ms !important; transition-duration:.001ms !important; } }
+
+  .phone{ width:100%; max-width:430px; background:var(--surface); border-radius:28px;
+    box-shadow:0 1px 2px rgba(20,24,34,.04), 0 20px 50px -20px rgba(20,24,34,.22);
+    overflow:hidden; position:relative; }
+
+  #mapsScreen{ display:flex; flex-direction:column; transition:opacity 420ms ease, transform 420ms ease, filter 420ms ease; }
+  #mapsScreen.leaving{ opacity:0; transform:scale(0.97); filter:blur(2px); pointer-events:none; }
+
+  .topbar{ padding:16px 16px 12px; border-bottom:1px solid var(--line); }
+  .brandrow{ display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+  .brandmark{ width:28px; height:28px; border-radius:8px; background:linear-gradient(155deg,var(--accent),#6D8CFF);
+    display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .brandmark svg{ width:15px; height:15px; }
+  .brandname{ font-weight:700; font-size:15.5px; letter-spacing:-0.01em; }
+  .brandsub{ font-size:11.5px; color:var(--ink-soft); margin-top:-1px; }
+
+  .searchbar{ display:flex; align-items:center; gap:9px; background:var(--bg-app); border:1px solid var(--line);
+    border-radius:12px; padding:10px 13px; }
+  .searchbar svg{ width:16px; height:16px; flex-shrink:0; color:#9AA1AE; }
+  .searchbar input{ border:none; background:transparent; outline:none; font:inherit; font-size:13.5px; color:var(--ink);
+    width:100%; }
+  .searchbar input::placeholder{ color:#9AA1AE; }
+
+  /* ---------- the real map ---------- */
+  .mapCanvas{ position:relative; width:100%; aspect-ratio:10/7; max-height:300px; overflow:hidden;
+    background:var(--land); touch-action:none; cursor:grab; }
+  .mapCanvas.dragging{ cursor:grabbing; }
+  .mapCanvas.addmode{ box-shadow:inset 0 0 0 3px var(--accent); cursor:crosshair; }
+  .mapCanvas svg{ position:absolute; inset:0; width:100%; height:100%; display:block; }
+  .maplabel{ font-family:'DM Sans',sans-serif; fill:#4A4738; font-weight:700; pointer-events:none; user-select:none;
+    paint-order:stroke; stroke:#F9F5EA; stroke-width:3px; stroke-linejoin:round; }
+  .roadlabel{ font-family:'DM Sans',sans-serif; fill:#847E68; font-weight:600; pointer-events:none; user-select:none;
+    paint-order:stroke; stroke:#FFFFFF; stroke-width:2.4px; stroke-linejoin:round; }
+
+  .pinLayer{ position:absolute; inset:0; pointer-events:none; }
+  .pin{ position:absolute; transform:translate(-50%,-100%); pointer-events:auto; cursor:grab;
+    display:flex; flex-direction:column; align-items:center; transition:filter 150ms ease; touch-action:none; }
+  .pin.beingDragged{ cursor:grabbing; z-index:8; filter:drop-shadow(0 6px 10px rgba(20,24,34,.35)); }
+  .pin.beingDragged .pinIcon{ transform:scale(1.2); }
+
+  .toast{ position:absolute; left:50%; bottom:14px; transform:translateX(-50%) translateY(8px); background:var(--ink);
+    color:#fff; font-size:12px; font-weight:600; padding:8px 14px; border-radius:100px; opacity:0; pointer-events:none;
+    transition:opacity 200ms ease, transform 200ms ease; white-space:nowrap; z-index:7; }
+  .toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+  .pinIcon{ width:26px; height:26px; filter:drop-shadow(0 3px 5px rgba(20,24,34,.25)); transition:transform 150ms ease; }
+  .pin:active .pinIcon{ transform:scale(0.9); }
+  .pin.selected .pinIcon{ transform:scale(1.15); }
+  .pin.dimmed{ opacity:0.28; }
+  .pinChip{ margin-top:3px; background:#fff; border-radius:100px; padding:2px 8px; font-size:10px; font-weight:700;
+    color:var(--ink); box-shadow:0 2px 6px rgba(20,24,34,.15); white-space:nowrap; max-width:120px; overflow:hidden;
+    text-overflow:ellipsis; }
+  .pin.flagpin .pinChip{ color:var(--warn); }
+
+  .callout{ position:absolute; transform:translate(-50%, calc(-100% - 34px)); background:var(--ink); color:#fff;
+    padding:8px 12px; border-radius:12px; font-size:12px; line-height:1.4; pointer-events:none; white-space:nowrap;
+    max-width:200px; opacity:0; transition:opacity 160ms ease; z-index:6; }
+  .callout.show{ opacity:1; }
+  .callout .ctitle{ font-weight:700; }
+  .callout .caddr{ color:rgba(255,255,255,.65); font-size:11px; }
+
+  .mapControls{ position:absolute; right:10px; bottom:10px; display:flex; flex-direction:column; gap:7px; z-index:4; }
+  .mapBtn{ width:32px; height:32px; border-radius:10px; background:#fff; border:1px solid var(--line);
+    box-shadow:0 2px 6px rgba(20,24,34,.12); display:flex; align-items:center; justify-content:center; cursor:pointer; }
+  .mapBtn:active{ transform:scale(0.94); }
+  .mapBtn svg{ width:15px; height:15px; color:var(--ink); }
+
+  .mapHint{ position:absolute; left:50%; top:10px; transform:translateX(-50%); background:var(--accent); color:#fff;
+    font-size:11.5px; font-weight:600; padding:7px 13px; border-radius:100px; opacity:0; pointer-events:none;
+    transition:opacity 200ms ease; white-space:nowrap; z-index:4; }
+  .mapHint.show{ opacity:1; }
+
+  /* ---------- list ---------- */
+  .listsection{ padding:4px 14px 10px; }
+  .listheader{ display:flex; align-items:center; justify-content:space-between; padding:14px 4px 8px; }
+  .listheader h1{ font-size:14.5px; margin:0; font-weight:700; }
+  .addBtn{ display:flex; align-items:center; gap:5px; background:var(--accent-soft); color:var(--accent);
+    border:none; font:inherit; font-weight:700; font-size:12px; padding:7px 11px; border-radius:100px; cursor:pointer; }
+  .addBtn.active{ background:var(--accent); color:#fff; }
+  .addBtn svg{ width:13px; height:13px; }
+
+  .listwrap{ max-height:250px; overflow-y:auto; }
+  .place{ display:flex; align-items:flex-start; gap:11px; padding:11px 6px; border-radius:12px; cursor:pointer;
+    transition:background 150ms ease; }
+  .place:hover{ background:var(--bg-app); }
+  .place.selected{ background:var(--accent-soft); }
+  .place.hidden-row{ display:none; }
+
+  .rowpin{ width:32px; height:32px; border-radius:50%; background:var(--accent-soft); color:var(--accent);
+    display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-top:1px; }
+  .rowpin svg{ width:16px; height:16px; }
+  .place.is-flag .rowpin{ background:var(--warn-soft); color:var(--warn); }
+
+  .rowbody{ flex:1; min-width:0; }
+  .rowtitle{ font-size:14px; font-weight:600; display:flex; align-items:center; gap:6px; }
+  .rowaddr{ font-size:12px; color:var(--ink-soft); margin-top:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tag{ font-size:10px; font-weight:700; color:var(--warn); background:var(--warn-soft); padding:2px 7px;
+    border-radius:100px; line-height:1.5; }
+
+  .rowactions{ display:flex; gap:4px; flex-shrink:0; margin-top:3px; }
+  .iconbtn{ width:26px; height:26px; border-radius:8px; border:none; background:transparent; color:#B0B5C0;
+    display:flex; align-items:center; justify-content:center; cursor:pointer; }
+  .iconbtn:hover{ background:var(--bg-app); color:var(--ink-soft); }
+  .iconbtn svg{ width:14px; height:14px; }
+
+  .emptyState{ text-align:center; padding:26px 10px; color:var(--ink-soft); font-size:13px; }
+
+  /* ---------- add/edit sheet ---------- */
+  .sheetBackdrop{ position:absolute; inset:0; background:rgba(20,24,34,.35); opacity:0; pointer-events:none;
+    transition:opacity 220ms ease; z-index:9; }
+  .sheetBackdrop.show{ opacity:1; pointer-events:all; }
+  .sheet{ position:absolute; left:0; right:0; bottom:0; background:#fff; border-radius:22px 22px 0 0;
+    padding:18px 18px calc(18px + env(safe-area-inset-bottom)); transform:translateY(100%);
+    transition:transform 280ms cubic-bezier(.32,.72,0,1); z-index:10; box-shadow:0 -10px 30px rgba(20,24,34,.15); }
+  .sheet.show{ transform:translateY(0); }
+  .sheetTitle{ font-size:15px; font-weight:700; margin-bottom:14px; }
+  .field{ margin-bottom:12px; }
+  .field label{ display:block; font-size:11.5px; font-weight:700; color:var(--ink-soft); margin-bottom:5px; }
+  .field input{ width:100%; border:1px solid var(--line); border-radius:11px; padding:10px 12px; font:inherit;
+    font-size:14px; outline:none; background:var(--bg-app); }
+  .field input:focus{ border-color:var(--accent); }
+  .sheetActions{ display:flex; gap:9px; margin-top:16px; }
+  .sheetActions button{ flex:1; font:inherit; font-weight:700; font-size:13.5px; padding:11px; border-radius:12px;
+    border:none; cursor:pointer; }
+  .btnCancel{ background:var(--bg-app); color:var(--ink-soft); }
+  .btnSave{ background:var(--accent); color:#fff; }
+  .btnSave:disabled{ opacity:0.45; cursor:not-allowed; }
+
+  .verifybar{ position:absolute; inset:0; background:rgba(255,255,255,.92); backdrop-filter:blur(2px);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; opacity:0;
+    pointer-events:none; transition:opacity 250ms ease; z-index:20; }
+  .verifybar.show{ opacity:1; pointer-events:all; }
+  .spinner{ width:34px; height:34px; border-radius:50%; border:3px solid var(--accent-soft); border-top-color:var(--accent);
+    animation:spin .8s linear infinite; }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .verifytext{ font-size:13px; color:var(--ink-soft); font-weight:500; }
+
+  /* ---------- SCREEN 2: birthday surprise ---------- */
+  #bdayScreen{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    text-align:center; padding:40px 26px; background:radial-gradient(120% 90% at 50% 0%, #3A2166 0%, #1C1036 55%, #120A24 100%);
+    color:#fff; opacity:0; visibility:hidden; transform:scale(1.03); transition:opacity 520ms ease, transform 600ms ease;
+    overflow:hidden; min-height:640px; }
+  #bdayScreen.show{ opacity:1; visibility:visible; transform:scale(1); }
+  .glow{ position:absolute; width:380px; height:380px; border-radius:50%;
+    background:radial-gradient(circle, rgba(255,200,87,.25), transparent 65%); top:-90px; left:50%; transform:translateX(-50%);
+    pointer-events:none; }
+  .eyebrow-emoji{ font-size:34px; margin-bottom:4px; filter:drop-shadow(0 6px 18px rgba(0,0,0,.3)); }
+  .bdaytitle{ font-family:'Fraunces',Georgia,serif; font-weight:600; font-size:clamp(30px,8vw,42px); line-height:1.12;
+    margin:6px 0 8px; letter-spacing:-0.01em; }
+  .bdaytitle em{ font-style:italic; color:#FFC857; }
+  .bdaysub{ font-size:15px; color:rgba(255, 255, 255, 0.904); max-width:300px; margin:0 auto 26px; line-height:1.5; }
+  .videowrap{ width:100%; max-width:340px; aspect-ratio:9/12; border-radius:22px; overflow:hidden; position:relative;
+    background:#0E0820; box-shadow:0 20px 60px -18px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.06); }
+  .videowrap video{ width:100%; height:100%; object-fit:cover; display:block; }
+  .videoplaceholder{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:10px; color:rgba(255,255,255,.55); font-size:13px; padding:20px; text-align:center; line-height:1.5; }
+  .videoplaceholder .hearticon{ font-size:30px; }
+  .unmuteBtn{ position:absolute; left:50%; bottom:16px; transform:translateX(-50%); background:rgba(0,0,0,.55);
+    border:1px solid rgba(255,255,255,.3); color:#fff; font-family:inherit; font-size:12.5px; font-weight:600;
+    padding:9px 16px; border-radius:100px; display:flex; align-items:center; gap:7px; cursor:pointer; backdrop-filter:blur(4px); }
+  .unmuteBtn.hidden{ display:none; }
+  #balloonLayer{ position:absolute; inset:0; pointer-events:none; overflow:hidden; z-index:2; }
+  .balloon{ position:absolute; bottom:-140px; width:46px; height:58px; border-radius:50% 50% 50% 50%/60% 60% 40% 40%;
+    opacity:.95; animation-name:floatUp; animation-timing-function:ease-in; animation-fill-mode:forwards; }
+  .balloon::before{ content:''; position:absolute; left:50%; top:100%; width:1px; height:30px;
+    background:rgba(255,255,255,.35); transform:translateX(-50%); }
+  .balloon::after{ content:''; position:absolute; top:14%; left:24%; width:12px; height:16px; background:rgba(255,255,255,.35);
+    border-radius:50%; filter:blur(1px); }
+  @keyframes floatUp{
+    0%{ transform:translateY(0) translateX(0) rotate(0deg); }
+    50%{ transform:translateY(-58vh) translateX(var(--sway,18px)) rotate(6deg); }
+    100%{ transform:translateY(-118vh) translateX(0) rotate(-4deg); opacity:0; }
+  }
+  .footNote{ position:relative; z-index:3; margin-top:26px; font-size:12px; }
+</style>
+</head>
+<body>
+
+<div class="phone">
+
+  <!-- ===================== SCREEN 1 — the "maps app" ===================== -->
+  <div id="mapsScreen">
+
+    <div class="topbar">
+      <div class="brandrow">
+        <div class="brandmark">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M12 2C7.6 2 4 5.6 4 10c0 6 8 12 8 12s8-6 8-12c0-4.4-3.6-8-8-8Z" fill="white"/><circle cx="12" cy="10" r="3" fill="#2E5EFF"/></svg>
+        </div>
+        <div>
+          <div class="brandname">Waypoint</div>
+          <div class="brandsub">Wesal, New Cairo · saved places</div>
+        </div>
+      </div>
+      <div class="searchbar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="searchInput" type="text" placeholder="Search a saved place…">
+      </div>
+    </div>
+
+    <div class="mapCanvas" id="mapCanvas">
+      <svg id="mapSvg" viewBox="0 0 1000 700" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <radialGradient id="lakeGrad" cx="35%" cy="30%" r="75%">
+            <stop offset="0%" stop-color="#8FCBEE"/>
+            <stop offset="55%" stop-color="#5EA9DE"/>
+            <stop offset="100%" stop-color="#3E86C4"/>
+          </radialGradient>
+          <filter id="groundNoise" x="-20%" y="-20%" width="140%" height="140%">
+            <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="n"/>
+            <feColorMatrix in="n" type="matrix" values="0 0 0 0 0.55  0 0 0 0 0.49  0 0 0 0 0.36  0 0 0 0.05 0"/>
+          </filter>
+          <filter id="roofShadow" x="-40%" y="-40%" width="180%" height="180%">
+            <feDropShadow dx="1.5" dy="2.5" stdDeviation="1.6" flood-color="#4A4327" flood-opacity="0.35"/>
+          </filter>
+        </defs>
+        <g id="world">
+          <rect x="0" y="0" width="1000" height="700" fill="var(--land)"/>
+          <rect x="0" y="0" width="1000" height="700" filter="url(#groundNoise)"/>
+
+          <!-- Suez Road, the highway the compound sits on (km 30, Cairo-Suez Road) -->
+          <path d="M-20,640 L1020,80" stroke="var(--road)" stroke-width="15" stroke-linecap="round"/>
+          <path d="M-20,640 L1020,80" stroke="var(--roadline)" stroke-width="1.2" stroke-dasharray="10 8"/>
+          <text x="130" y="562" class="roadlabel" font-size="11" transform="rotate(-28 130 562)">Suez Road · Km 30</text>
+
+          <!-- minor spur roads toward neighbouring compounds -->
+          <g stroke="var(--road)" stroke-width="6" stroke-linecap="round" fill="none" opacity="0.85">
+            <path d="M120,540 L60,610"/>
+            <path d="M840,180 L910,120"/>
+          </g>
+
+          <!-- ===== Wesal Residence phase ===== -->
+          <rect x="266" y="352" width="304" height="228" rx="34" fill="#F8F2E2" stroke="#DCCFA6" stroke-width="2.5" stroke-dasharray="3 5"/>
+          <rect x="300" y="386" width="236" height="160" rx="22" fill="none" stroke="var(--road)" stroke-width="5"/>
+          <rect x="300" y="386" width="236" height="160" rx="22" fill="none" stroke="var(--roadline)" stroke-width="1"/>
+
+          <!-- residential rooftops -->
+          <g filter="url(#roofShadow)">
+            <g fill="#EFE6D2"><rect x="308" y="402" width="26" height="17" rx="2.5"/><rect x="308" y="428" width="26" height="17" rx="2.5"/><rect x="308" y="454" width="26" height="17" rx="2.5"/></g>
+            <g fill="#E9DFC7"><rect x="382" y="404" width="28" height="16" rx="2.5"/><rect x="452" y="400" width="26" height="17" rx="2.5"/></g>
+            <g fill="#EFE6D2"><rect x="484" y="428" width="27" height="17" rx="2.5"/><rect x="484" y="454" width="27" height="17" rx="2.5"/><rect x="484" y="480" width="27" height="17" rx="2.5"/></g>
+            <g fill="#E9DFC7"><rect x="372" y="516" width="27" height="16" rx="2.5"/><rect x="412" y="518" width="27" height="16" rx="2.5"/></g>
+          </g>
+          <text x="418" y="374" text-anchor="middle" class="maplabel" font-size="14" font-weight="700">Wesal Residence</text>
+
+          <!-- landscaping -->
+          <g fill="#8FB86A" opacity="0.85">
+            <circle cx="360" cy="402" r="4"/><circle cx="368" cy="408" r="3.4"/><circle cx="440" cy="430" r="4"/>
+            <circle cx="446" cy="424" r="3.2"/><circle cx="320" cy="500" r="4"/><circle cx="440" cy="500" r="3.6"/>
+          </g>
+
+          <!-- mosque -->
+          <g transform="translate(340,460)">
+            <circle cx="0" cy="-4" r="9" fill="#CBBE95"/>
+            <rect x="-3" y="-22" width="6" height="18" fill="#CBBE95"/>
+            <circle cx="0" cy="-24" r="2.4" fill="#CBBE95"/>
+          </g>
+          <text x="340" y="486" text-anchor="middle" class="maplabel" font-size="9">Mosque</text>
+
+          <!-- ===== Wesal Views phase ===== -->
+          <rect x="596" y="228" width="322" height="266" rx="34" fill="#F8F2E2" stroke="#DCCFA6" stroke-width="2.5" stroke-dasharray="3 5"/>
+          <rect x="628" y="262" width="258" height="198" rx="22" fill="none" stroke="var(--road)" stroke-width="5"/>
+          <rect x="628" y="262" width="258" height="198" rx="22" fill="none" stroke="var(--roadline)" stroke-width="1"/>
+
+          <!-- villa rooftops -->
+          <g filter="url(#roofShadow)">
+            <g fill="#EFE6D2"><rect x="648" y="392" width="22" height="20" rx="3"/><rect x="648" y="420" width="22" height="20" rx="3"/></g>
+            <g fill="#E9DFC7"><rect x="826" y="296" width="24" height="18" rx="3"/><rect x="826" y="322" width="24" height="18" rx="3"/><rect x="826" y="348" width="24" height="18" rx="3"/></g>
+            <g fill="#EFE6D2"><rect x="694" y="268" width="24" height="16" rx="3"/><rect x="856" y="396" width="22" height="18" rx="3"/></g>
+          </g>
+          <text x="757" y="250" text-anchor="middle" class="maplabel" font-size="14" font-weight="700">Wesal Views</text>
+
+          <!-- landscaping -->
+          <g fill="#8FB86A" opacity="0.85">
+            <circle cx="800" cy="380" r="4"/><circle cx="808" cy="464" r="4"/><circle cx="720" cy="400" r="3.6"/>
+            <circle cx="860" cy="440" r="3.4"/><circle cx="660" cy="380" r="3.6"/>
+          </g>
+
+          <!-- artificial lake -->
+          <ellipse cx="772" cy="418" rx="58" ry="38" fill="url(#lakeGrad)"/>
+          <ellipse cx="772" cy="418" rx="58" ry="38" fill="none" stroke="#2E6FA8" stroke-width="1" opacity="0.4"/>
+          <text x="772" y="422" text-anchor="middle" class="maplabel" font-size="10">Lake</text>
+
+          <!-- pool & clubhouse -->
+          <rect x="646" y="290" width="70" height="42" rx="10" fill="#CBD8F0"/>
+          <text x="681" y="284" text-anchor="middle" class="maplabel" font-size="9">Pool &amp; Clubhouse</text>
+
+          <!-- ===== shared commercial area, between the two phases, on the main gate ===== -->
+          <g fill="#E7DAB3" stroke="#CDBB86" stroke-width="1">
+            <rect x="560" y="296" width="20" height="20" rx="3"/>
+            <rect x="584" y="296" width="20" height="20" rx="3"/>
+            <rect x="572" y="320" width="20" height="20" rx="3"/>
+          </g>
+          <text x="582" y="284" text-anchor="middle" class="maplabel" font-size="9.5">Commercial Area</text>
+
+          <!-- main gate on Suez Road -->
+          <g transform="translate(555,330)">
+            <rect x="-10" y="-3" width="6" height="11" fill="#9A9488"/>
+            <rect x="4" y="-3" width="6" height="11" fill="#9A9488"/>
+          </g>
+          <text x="555" y="348" text-anchor="middle" class="roadlabel" font-size="9">Main Gate</text>
+
+          <text x="587" y="222" text-anchor="middle" class="maplabel" font-size="17" font-weight="700">Wesal</text>
+
+          <!-- British University in Egypt landmark -->
+          <g transform="translate(958,340)">
+            <polygon points="-16,-4 0,-13 16,-4" fill="#8C97C4"/>
+            <rect x="-14" y="-4" width="28" height="9" rx="2" fill="#A3ADD3"/>
+          </g>
+          <text x="958" y="366" text-anchor="middle" class="maplabel" font-size="10">British University</text>
+          <text x="958" y="378" text-anchor="middle" class="maplabel" font-size="10">in Egypt</text>
+
+          <!-- neighbouring compounds & drive times -->
+          <text x="150" y="185" text-anchor="middle" class="maplabel" font-size="14">El Shorouk City</text>
+          <text x="72" y="628" text-anchor="middle" class="maplabel" font-size="12">Al Rehab · 20 min</text>
+          <text x="905" y="150" text-anchor="middle" class="maplabel" font-size="12">Madinaty · 8 min</text>
+          <text x="905" y="62" text-anchor="end" class="maplabel" font-size="11">New Administrative Capital →</text>
+        </g>
+      </svg>
+
+      <div class="pinLayer" id="pinLayer"></div>
+      <div class="callout" id="callout"></div>
+      <div class="mapHint" id="mapHint">Tap the map to drop a pin</div>
+      <div class="toast" id="toast"></div>
+
+      <div class="mapControls">
+        <button class="mapBtn" id="zoomIn" aria-label="Zoom in"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg></button>
+        <button class="mapBtn" id="zoomOut" aria-label="Zoom out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h14"/></svg></button>
+        <button class="mapBtn" id="recenter" aria-label="Recenter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
+      </div>
+    </div>
+
+    <div class="listsection">
+      <div class="listheader">
+        <h1 id="countLabel">0 saved places</h1>
+        <button class="addBtn" id="addBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M12 5v14M5 12h14"/></svg>
+          Add pin
+        </button>
+      </div>
+      <div class="listwrap" id="listWrap"></div>
+    </div>
+
+    <div class="verifybar" id="verifyBar">
+      <div class="spinner"></div>
+      <div class="verifytext">Verifying pin…</div>
+    </div>
+
+    <div class="sheetBackdrop" id="sheetBackdrop"></div>
+    <div class="sheet" id="sheet">
+      <div class="sheetTitle" id="sheetTitle">Add pin</div>
+      <div class="field"><label>Label</label><input id="fieldTitle" type="text" placeholder="e.g. Grandma's house"></div>
+      <div class="field"><label>Address</label><input id="fieldAddr" type="text" placeholder="e.g. 12 Nile St, Zamalek"></div>
+      <div class="sheetActions">
+        <button class="btnCancel" id="sheetCancel">Cancel</button>
+        <button class="btnSave" id="sheetSave">Save pin</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ===================== SCREEN 2 — the surprise ===================== -->
+  <div id="bdayScreen">
+    <div class="glow"></div>
+    <div id="balloonLayer"></div>
+    <div class="eyebrow-emoji">🎂</div>
+    <h1 class="bdaytitle">Happy birthday,<br><em id="nameSlot">Friend</em></h1>
+    <p class="bdaysub">Grattis bästa Merna på din 20 års dag!!! 🎉🎉🎉</p>
+    <div class="videowrap">
+      <video id="bdayVideo" playsinline muted loop poster=""></video>
+      <!-- <iframe id="ytFrame" style="display:none;width:100%;height:100%;border:0;" allow="autoplay; encrypted-media" allowfullscreen></iframe> -->
+      <iframe id="ytFrame" style="display:none;width:100%;height:100%;border:0;" encrypted-media; picture-in-picture" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+      <div class="videoplaceholder" id="videoPlaceholder">
+        <div class="hearticon">💛</div>
+        <div>Add your video by setting <strong>VIDEO_SRC</strong><br>(short clip) or <strong>YOUTUBE_ID</strong><br>(longer video) before sending this.</div>
+      </div>
+      <button class="unmuteBtn hidden" id="unmuteBtn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M19 5a9 9 0 0 1 0 14M15.5 8.5a5 5 0 0 1 0 7"/></svg>
+        Tap for sound
+      </button>
+    </div>
+    <div class="footNote">Hoppas du har bästa året och bästa år 20 min allra bästa vän och storasyster som har blivit gammal nu 😂🎈</div>
+  </div>
+
+</div>
+
+<script>
+/* ============================================================
+   CONFIG — edit this section
+   ============================================================ */
+const FRIEND_NAME = "Merna";
+const VIDEO_SRC = "";     // a base64 data URL — only for SHORT clips (well under a minute)
+const YOUTUBE_ID = "6I-gN_-IO_g";    // e.g. "dQw4w9WgXcQ" — for a longer video, upload it as "Unlisted" on YouTube and paste the video ID here. Takes priority over VIDEO_SRC if both are set.
+// https://youtu.be/6I-gN_-IO_g?si=Dc1H2-JwzOn4wV3Y
+// https://youtu.be/eoCo-aYa7mw?si=HfpIPcwj3aF2e_MB
+// x/y are coordinates on the map, 0-1000 (horizontal) by 0-700 (vertical).
+const ADDRESSES = [
+  { id:1, title:"Home",         addr:"WR310, Wesal Residence",       x:400, y:440, flag:false },
+  { id:2, title:"Falak School",  addr:"Villa 14, Wesal Views",               x:200, y:500, flag:false },
+  { id:3, title:"WR316",          addr:"WR316, Wesal Residence",       x:460, y:480, flag:false },
+  { id:4, title:"WR320",      addr:"WR320, Wesal Residence",              x:465, y:500, flag:false },
+  { id:5, title:"WR343",      addr:"WR343, Wesal Residence",   x:470, y:550, flag:true, tag:"Needs review" }
+];
+/* ============================================================ */
+
+document.getElementById('nameSlot').textContent = FRIEND_NAME;
+
+let places = ADDRESSES.map(p => ({...p}));
+let nextId = Math.max(...places.map(p=>p.id)) + 1;
+let selectedId = null;
+let addMode = false;
+let pendingNewPin = null; // {x,y} while the add sheet is open for a brand-new pin
+let editingId = null;     // id being edited, or null when adding
+
+const ICON_PIN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s7-7.2 7-12a7 7 0 1 0-14 0c0 4.8 7 12 7 12Z"/><circle cx="12" cy="9" r="2.4"/></svg>`;
+const ICON_EDIT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
+const ICON_TRASH = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>`;
+
+/* ---------- pan / zoom state ---------- */
+const mapCanvas = document.getElementById('mapCanvas');
+const worldG = document.getElementById('world');
+const pinLayer = document.getElementById('pinLayer');
+const callout = document.getElementById('callout');
+
+const INITIAL = { cx: 587, cy: 412, scale: 1.2 };
+let view = { tx: 0, ty: 0, scale: INITIAL.scale };
+
+function canvasSize(){
+  const r = mapCanvas.getBoundingClientRect();
+  return { w: r.width, h: r.height, left: r.left, top: r.top };
+}
+function setCenter(cx, cy, scale){
+  const { w, h } = canvasSize();
+  view.scale = scale;
+  view.tx = (w/2) * (1000/w) - cx*scale; // world-units tx
+  view.ty = (h/2) * (700/h) - cy*scale;
+}
+function applyTransform(){
+  worldG.setAttribute('transform', `translate(${view.tx},${view.ty}) scale(${view.scale})`);
+  renderPinPositions();
+}
+function worldToScreen(x, y){
+  const { w, h } = canvasSize();
+  return {
+    sx: (x*view.scale + view.tx) * (w/1000),
+    sy: (y*view.scale + view.ty) * (h/700)
+  };
+}
+function screenToWorld(sx, sy){
+  const { w, h } = canvasSize();
+  return {
+    x: (sx*1000/w - view.tx) / view.scale,
+    y: (sy*700/h - view.ty) / view.scale
+  };
+}
+function clampScale(s){ return Math.min(3.2, Math.max(0.7, s)); }
+
+setCenter(INITIAL.cx, INITIAL.cy, INITIAL.scale);
+applyTransform();
+window.addEventListener('resize', () => applyTransform());
+
+/* ---- drag to pan / tap to select or add ---- */
+let dragging = false, dragStart = null, moved = false;
+
+function isControlTarget(e){ return e.target.closest('.pin') || e.target.closest('.mapBtn'); }
+
+mapCanvas.addEventListener('pointerdown', (e) => {
+  if (isControlTarget(e)) return; // let the pin/button handle its own tap
+  dragging = true; moved = false;
+  dragStart = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty };
+  mapCanvas.setPointerCapture(e.pointerId);
+  mapCanvas.classList.add('dragging');
+});
+mapCanvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const dx = e.clientX - dragStart.x, dy = e.clientY - dragStart.y;
+  if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
+  const { w, h } = canvasSize();
+  view.tx = dragStart.tx + dx * (1000/w);
+  view.ty = dragStart.ty + dy * (700/h);
+  applyTransform();
+});
+mapCanvas.addEventListener('pointerup', (e) => {
+  if (isControlTarget(e) && !dragging) return; // tap originated on a pin/button, not the map background
+  dragging = false;
+  mapCanvas.classList.remove('dragging');
+  if (!moved){
+    const rect = mapCanvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    const worldPt = screenToWorld(sx, sy);
+    if (addMode){
+      openAddSheet(worldPt.x, worldPt.y);
+    } else {
+      deselect();
+    }
+  }
+});
+mapCanvas.addEventListener('pointercancel', () => { dragging = false; mapCanvas.classList.remove('dragging'); });
+
+mapCanvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const rect = mapCanvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  const before = screenToWorld(sx, sy);
+  view.scale = clampScale(view.scale * (e.deltaY < 0 ? 1.12 : 0.89));
+  const { w, h } = canvasSize();
+  view.tx = sx*1000/w - before.x*view.scale;
+  view.ty = sy*700/h - before.y*view.scale;
+  applyTransform();
+}, { passive:false });
+
+document.getElementById('zoomIn').addEventListener('click', () => zoomBy(1.25));
+document.getElementById('zoomOut').addEventListener('click', () => zoomBy(0.8));
+function zoomBy(factor){
+  const { w, h } = canvasSize();
+  const centerWorld = screenToWorld(w/2, h/2);
+  view.scale = clampScale(view.scale * factor);
+  const { w:w2, h:h2 } = canvasSize();
+  view.tx = (w2/2)*(1000/w2) - centerWorld.x*view.scale;
+  view.ty = (h2/2)*(700/h2) - centerWorld.y*view.scale;
+  applyTransform();
+}
+document.getElementById('recenter').addEventListener('click', () => {
+  setCenter(INITIAL.cx, INITIAL.cy, INITIAL.scale);
+  applyTransform();
+});
+
+function panTo(x, y){
+  setCenter(x, y, Math.max(view.scale, 1.6));
+  applyTransform();
+}
+
+/* ---------- pins ---------- */
+function renderPins(){
+  pinLayer.innerHTML = '';
+  places.forEach(p => {
+    const el = document.createElement('div');
+    el.className = 'pin' + (p.flag ? ' flagpin' : '') + (p.id === selectedId ? ' selected' : '');
+    el.dataset.id = p.id;
+    el.innerHTML = `
+      <div class="pinIcon">
+        <svg viewBox="0 0 24 24">
+          <path d="M12 2C7.6 2 4 5.6 4 10c0 6 8 12 8 12s8-6 8-12c0-4.4-3.6-8-8-8Z" fill="${p.flag ? '#FF8A3D' : '#2E5EFF'}"/>
+          ${p.flag ? '<text x="12" y="13.5" text-anchor="middle" font-size="10" font-weight="700" fill="white">!</text>' : '<circle cx="12" cy="10" r="3" fill="white"/>'}
+        </svg>
+      </div>
+      <div class="pinChip">${escapeHtml(p.title)}</div>
+    `;
+    el.addEventListener('pointerdown', (e) => { e.stopPropagation(); startPinDrag(e, p, el); });
+    pinLayer.appendChild(el);
+  });
+  renderPinPositions();
+}
+
+function startPinDrag(e, p, el){
+  el.setPointerCapture(e.pointerId);
+  const startX = e.clientX, startY = e.clientY;
+  let movedPin = false;
+
+  function onMove(ev){
+    const dx = ev.clientX - startX, dy = ev.clientY - startY;
+    if (!movedPin && (Math.abs(dx) > 5 || Math.abs(dy) > 5)){
+      movedPin = true;
+      el.classList.add('beingDragged');
+    }
+    if (movedPin){
+      const rect = mapCanvas.getBoundingClientRect();
+      const sx = ev.clientX - rect.left, sy = ev.clientY - rect.top;
+      const w = screenToWorld(sx, sy);
+      p.x = w.x; p.y = w.y;
+      renderPinPositions();
+    }
+  }
+  function onUp(ev){
+    el.releasePointerCapture(e.pointerId);
+    el.removeEventListener('pointermove', onMove);
+    el.removeEventListener('pointerup', onUp);
+    el.removeEventListener('pointercancel', onCancel);
+    el.classList.remove('beingDragged');
+    if (movedPin){
+      showToast(`Moved "${p.title}"`);
+      if (selectedId === p.id) positionCallout(p);
+    } else {
+      onPinTap(p);
+    }
+  }
+  function onCancel(){
+    el.releasePointerCapture(e.pointerId);
+    el.removeEventListener('pointermove', onMove);
+    el.removeEventListener('pointerup', onUp);
+    el.removeEventListener('pointercancel', onCancel);
+    el.classList.remove('beingDragged');
+  }
+  el.addEventListener('pointermove', onMove);
+  el.addEventListener('pointerup', onUp);
+  el.addEventListener('pointercancel', onCancel);
+}
+
+const toast = document.getElementById('toast');
+function showToast(msg){
+  toast.textContent = msg;
+  toast.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => toast.classList.remove('show'), 1600);
+}
+function renderPinPositions(){
+  places.forEach(p => {
+    const el = pinLayer.querySelector(`.pin[data-id="${p.id}"]`);
+    if (!el) return;
+    const { sx, sy } = worldToScreen(p.x, p.y);
+    el.style.left = sx + 'px';
+    el.style.top = sy + 'px';
+  });
+  if (selectedId !== null){
+    const sp = places.find(p => p.id === selectedId);
+    if (sp) positionCallout(sp);
+  }
+}
+function positionCallout(p){
+  const { sx, sy } = worldToScreen(p.x, p.y);
+  callout.style.left = sx + 'px';
+  callout.style.top = sy + 'px';
+}
+
+function onPinTap(p){
+  if (p.flag){ triggerSurprise(); return; }
+  selectPlace(p.id);
+}
+function selectPlace(id){
+  selectedId = id;
+  const p = places.find(pl => pl.id === id);
+  if (!p) return;
+  callout.innerHTML = `<div class="ctitle">${escapeHtml(p.title)}</div><div class="caddr">${escapeHtml(p.addr)}</div>`;
+  positionCallout(p);
+  callout.classList.add('show');
+  renderPins();
+  renderList();
+  const row = listWrap.querySelector(`.place[data-id="${id}"]`);
+  if (row) row.scrollIntoView({ block:'nearest', behavior:'smooth' });
+}
+function deselect(){
+  selectedId = null;
+  callout.classList.remove('show');
+  renderPins();
+  renderList();
+}
+
+/* ---------- list ---------- */
+const listWrap = document.getElementById('listWrap');
+const countLabel = document.getElementById('countLabel');
+const searchInput = document.getElementById('searchInput');
+
+function renderList(){
+  const q = searchInput.value.trim().toLowerCase();
+  listWrap.innerHTML = '';
+  const filtered = places.filter(p => !q || p.title.toLowerCase().includes(q) || p.addr.toLowerCase().includes(q));
+  countLabel.textContent = places.length + (places.length === 1 ? ' saved place' : ' saved places');
+
+  if (filtered.length === 0){
+    const empty = document.createElement('div');
+    empty.className = 'emptyState';
+    empty.textContent = places.length === 0 ? 'No saved places yet. Tap "Add pin" to drop one.' : 'No places match your search.';
+    listWrap.appendChild(empty);
+  }
+
+  filtered.forEach(p => {
+    const row = document.createElement('div');
+    row.className = 'place' + (p.flag ? ' is-flag' : '') + (p.id === selectedId ? ' selected' : '');
+    row.dataset.id = p.id;
+    row.innerHTML = `
+      <div class="rowpin">${ICON_PIN}</div>
+      <div class="rowbody">
+        <div class="rowtitle">${escapeHtml(p.title)}${p.flag ? `<span class="tag">${escapeHtml(p.tag || 'Needs review')}</span>` : ''}</div>
+        <div class="rowaddr">${escapeHtml(p.addr)}</div>
+      </div>
+      <div class="rowactions">
+        <button class="iconbtn editBtn" aria-label="Edit">${ICON_EDIT}</button>
+        <button class="iconbtn delBtn" aria-label="Delete">${ICON_TRASH}</button>
+      </div>
+    `;
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.editBtn') || e.target.closest('.delBtn')) return;
+      if (p.flag){ triggerSurprise(); return; }
+      selectPlace(p.id);
+      panTo(p.x, p.y);
+    });
+    row.querySelector('.editBtn').addEventListener('click', (e) => { e.stopPropagation(); openEditSheet(p.id); });
+    row.querySelector('.delBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (confirm(`Remove "${p.title}" from your saved places?`)){
+        places = places.filter(pl => pl.id !== p.id);
+        showToast(`Removed "${p.title}"`);
+        if (selectedId === p.id) deselect(); else { renderPins(); renderList(); }
+      }
+    });
+    listWrap.appendChild(row);
+  });
+}
+searchInput.addEventListener('input', () => renderList());
+
+/* ---------- add pin flow ---------- */
+const addBtn = document.getElementById('addBtn');
+const mapHint = document.getElementById('mapHint');
+
+addBtn.addEventListener('click', () => {
+  addMode = !addMode;
+  addBtn.classList.toggle('active', addMode);
+  mapCanvas.classList.toggle('addmode', addMode);
+  mapHint.classList.toggle('show', addMode);
+});
+
+function openAddSheet(x, y){
+  editingId = null;
+  pendingNewPin = { x, y };
+  document.getElementById('sheetTitle').textContent = 'Add pin';
+  document.getElementById('fieldTitle').value = '';
+  document.getElementById('fieldAddr').value = '';
+  showSheet();
+}
+function openEditSheet(id){
+  const p = places.find(pl => pl.id === id);
+  if (!p) return;
+  editingId = id;
+  pendingNewPin = null;
+  document.getElementById('sheetTitle').textContent = 'Edit pin';
+  document.getElementById('fieldTitle').value = p.title;
+  document.getElementById('fieldAddr').value = p.addr;
+  showSheet();
+}
+
+const sheet = document.getElementById('sheet');
+const sheetBackdrop = document.getElementById('sheetBackdrop');
+function showSheet(){ sheet.classList.add('show'); sheetBackdrop.classList.add('show'); document.getElementById('fieldTitle').focus(); }
+function hideSheet(){
+  sheet.classList.remove('show'); sheetBackdrop.classList.remove('show');
+  if (addMode){ addMode = false; addBtn.classList.remove('active'); mapCanvas.classList.remove('addmode'); mapHint.classList.remove('show'); }
+  pendingNewPin = null; editingId = null;
+}
+document.getElementById('sheetCancel').addEventListener('click', hideSheet);
+sheetBackdrop.addEventListener('click', hideSheet);
+
+document.getElementById('sheetSave').addEventListener('click', () => {
+  const title = document.getElementById('fieldTitle').value.trim();
+  const addr = document.getElementById('fieldAddr').value.trim();
+  if (!title) { document.getElementById('fieldTitle').focus(); return; }
+
+  if (editingId !== null){
+    const p = places.find(pl => pl.id === editingId);
+    if (p){ p.title = title; p.addr = addr || p.addr; }
+    showToast(`Saved "${title}"`);
+  } else if (pendingNewPin){
+    places.push({ id: nextId++, title, addr: addr || 'Custom pin', x: pendingNewPin.x, y: pendingNewPin.y, flag:false });
+    showToast(`Added "${title}"`);
+  }
+  hideSheet();
+  renderPins();
+  renderList();
+});
+
+/* ---------- reveal ---------- */
+const verifyBar = document.getElementById('verifyBar');
+const mapsScreen = document.getElementById('mapsScreen');
+const bdayScreen = document.getElementById('bdayScreen');
+
+function setupMedia() {
+  const videoEl = document.getElementById('bdayVideo');
+  const ytFrame = document.getElementById('ytFrame');
+  const placeholder = document.getElementById('videoPlaceholder');
+
+  if (YOUTUBE_ID) {
+    // Hide native video tag & placeholder, show YouTube iframe
+    videoEl.style.display = 'none';
+    placeholder.style.display = 'none';
+    ytFrame.style.display = 'block';
+
+    // Construct YouTube embed URL with autoplay, mute, loop, and origin parameters
+    // ytFrame.src = `https://www.youtube.com/embed/${YOUTUBE_ID}?enablejsapi=1&autoplay=1&mute=1&loop=1&playlist=${YOUTUBE_ID}&rel=0`;
+    ytFrame.src = `https://www.youtube-nocookie.com/embed/${YOUTUBE_ID}?autoplay=0&playsinline=1&rel=0&origin=${encodeURIComponent(window.location.origin)}`;
+  } else if (VIDEO_SRC) {
+    // Fallback to base64 or direct URL video file
+    ytFrame.style.display = 'none';
+    placeholder.style.display = 'none';
+    videoEl.style.display = 'block';
+    videoEl.src = VIDEO_SRC;
+    videoEl.play();
+  }
+}
+
+function triggerSurprise(){
+  verifyBar.classList.add('show');
+  setTimeout(() => {
+    mapsScreen.classList.add('leaving');
+    bdayScreen.classList.add('show');
+    setupMedia();
+    startVideo();
+    launchBalloons();
+  }, 900);
+}
+
+/* ---------- video ---------- */
+const video = document.getElementById('bdayVideo');
+const ytFrame = document.getElementById('ytFrame');
+const videoPlaceholder = document.getElementById('videoPlaceholder');
+const unmuteBtn = document.getElementById('unmuteBtn');
+
+function startVideo(){
+  if (YOUTUBE_ID){
+    videoPlaceholder.style.display = 'none';
+    ytFrame.style.display = 'block';
+    ytFrame.src = `https://www.youtube-nocookie.com/embed/${YOUTUBE_ID}?autoplay=0&mute=1&rel=0&modestbranding=1&playsinline=1&enablejsapi=1`;
+    unmuteBtn.classList.remove('hidden');
+    return;
+  }
+  if (!VIDEO_SRC){ videoPlaceholder.style.display = 'flex'; return; }
+  videoPlaceholder.style.display = 'none';
+  video.src = VIDEO_SRC;
+  video.muted = true;
+  video.play().then(() => unmuteBtn.classList.remove('hidden')).catch(() => unmuteBtn.classList.remove('hidden'));
+}
+unmuteBtn.addEventListener('click', () => {
+  if (YOUTUBE_ID){
+    ytFrame.contentWindow.postMessage(JSON.stringify({ event:'command', func:'unMute', args:[] }), '*');
+    unmuteBtn.classList.add('hidden');
+    return;
+  }
+  video.muted = false; video.play(); unmuteBtn.classList.add('hidden');
+});
+
+/* ---------- balloons ---------- */
+const balloonLayer = document.getElementById('balloonLayer');
+const balloonColors = ['#FF6B6B', '#4ECDC4', '#FFC857', '#FF9FE5', '#B892FF', '#6FD3FF'];
+function spawnBalloon(){
+  const b = document.createElement('div');
+  b.className = 'balloon';
+  const size = 40 + Math.random() * 20;
+  b.style.width = size + 'px';
+  b.style.height = (size * 1.25) + 'px';
+  b.style.left = (Math.random() * 88) + '%';
+  b.style.background = balloonColors[Math.floor(Math.random() * balloonColors.length)];
+  b.style.setProperty('--sway', (Math.random() > 0.5 ? '' : '-') + (14 + Math.random()*20) + 'px');
+  const duration = 5.5 + Math.random() * 3;
+  b.style.animationDuration = duration + 's';
+  balloonLayer.appendChild(b);
+  setTimeout(() => b.remove(), duration * 1000 + 200);
+}
+let balloonInterval;
+function launchBalloons(){
+  for (let i = 0; i < 8; i++) setTimeout(() => spawnBalloon(), i * 180);
+  balloonInterval = setInterval(spawnBalloon, 700);
+  setTimeout(() => clearInterval(balloonInterval), 9000);
+}
+
+function escapeHtml(str){
+  return String(str).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+/* ---------- init ---------- */
+renderPins();
+renderList();
+</script>
+
+</body>
+</html>
